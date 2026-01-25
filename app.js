@@ -80,7 +80,6 @@ const stopTimer = () => {
   cycleCount = 1;
   remainingSeconds = getDuration("practice");
   loopStatus.textContent = "Stopped";
-  playStopSfx();
   updateDisplay();
   updateControls();
 };
@@ -132,13 +131,12 @@ const playRestStartSfx = () => {
   setTimeout(() => playTone(390, 0.22, "sine"), 120);
 };
 
-const playStartSfx = () => {
-  playTone(660, 0.2, "sine");
-  setTimeout(() => playTone(990, 0.2, "sine"), 120);
-};
-
-const playStopSfx = () => {
-  playTone(300, 0.25, "square");
+const playPhaseStartSfx = () => {
+  if (currentPhase === "practice") {
+    playPracticeStartSfx();
+  } else {
+    playRestStartSfx();
+  }
 };
 
 const nextPhaseCycle = () => {
@@ -179,7 +177,7 @@ const startTimer = () => {
   isRunning = true;
   isPaused = false;
   loopStatus.textContent = "Running";
-  playStartSfx();
+  playPhaseStartSfx();
   updateDisplay();
   updateControls();
 };
