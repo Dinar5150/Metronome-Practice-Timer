@@ -48,66 +48,83 @@ const clampNumber = (value, min, max) => {
   return Math.min(Math.max(num, min), max);
 };
 
+const PHASES = {
+  PRACTICE: "practice",
+  REST: "rest",
+};
+
 const formatTime = (totalSeconds) => {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 };
 
-const getDuration = (phase) => {
-  if (phase === "practice") {
-    const minutes = clampNumber(practiceMinutesInput.value, 0, 59);
-    const seconds = clampNumber(practiceSecondsInput.value, 0, 59);
-    return minutes * 60 + seconds;
-  }
-  const minutes = clampNumber(restMinutesInput.value, 0, 59);
-  const seconds = clampNumber(restSecondsInput.value, 0, 59);
-  return minutes * 60 + seconds;
+const phaseInputs = {
+  [PHASES.PRACTICE]: {
+    minutes: practiceMinutesInput,
+    seconds: practiceSecondsInput,
+  },
+  [PHASES.REST]: {
+    minutes: restMinutesInput,
+    seconds: restSecondsInput,
+  },
 };
+
+const getPhaseLabel = (phase) => (phase === PHASES.PRACTICE ? "Practice" : "Rest");
+
+const getOppositePhase = (phase) => (phase === PHASES.PRACTICE ? PHASES.REST : PHASES.PRACTICE);
+
+const getInputDuration = ({ minutes, seconds }) => {
+  const minutesValue = clampNumber(minutes.value, 0, 59);
+  const secondsValue = clampNumber(seconds.value, 0, 59);
+  return minutesValue * 60 + secondsValue;
+};
+
+const getDuration = (phase) => getInputDuration(phaseInputs[phase] || phaseInputs[PHASES.PRACTICE]);
 
 const updateSummaries = () => {
   // previews removed; nothing to update here
 };
 
 const getStartPhase = () => {
-  const practiceDuration = getDuration("practice");
-  const restDuration = getDuration("rest");
+  const practiceDuration = getDuration(PHASES.PRACTICE);
+  const restDuration = getDuration(PHASES.REST);
   if (practiceDuration > 0) {
-    return { phase: "practice", duration: practiceDuration };
+    return { phase: PHASES.PRACTICE, duration: practiceDuration };
   }
   if (restDuration > 0) {
-    return { phase: "rest", duration: restDuration };
+    return { phase: PHASES.REST, duration: restDuration };
   }
   return null;
 };
 
 const getNextPhase = () => {
-  const practiceDuration = getDuration("practice");
-  const restDuration = getDuration("rest");
+  const practiceDuration = getDuration(PHASES.PRACTICE);
+  const restDuration = getDuration(PHASES.REST);
   if (practiceDuration === 0 && restDuration === 0) {
     return null;
   }
-  if (currentPhase === "practice") {
+  if (currentPhase === PHASES.PRACTICE) {
     if (restDuration > 0) {
-      return { phase: "rest", duration: restDuration, incrementCycle: false };
+      return { phase: PHASES.REST, duration: restDuration, incrementCycle: false };
     }
-    return { phase: "practice", duration: practiceDuration, incrementCycle: true };
+    return { phase: PHASES.PRACTICE, duration: practiceDuration, incrementCycle: true };
   }
   if (practiceDuration > 0) {
-    return { phase: "practice", duration: practiceDuration, incrementCycle: true };
+    return { phase: PHASES.PRACTICE, duration: practiceDuration, incrementCycle: true };
   }
-  return { phase: "rest", duration: restDuration, incrementCycle: false };
+  return { phase: PHASES.REST, duration: restDuration, incrementCycle: false };
 };
 
 const updateDisplay = () => {
   timerDisplay.textContent = formatTime(remainingSeconds);
-  const next = currentPhase === "practice" ? "Rest" : "Practice";
-  nextPhase.textContent = next;
-  phaseBadge.textContent = currentPhase === "practice" ? "Practice" : "Rest";
-  phaseBadge.classList.toggle("rest", currentPhase === "rest");
+  const nextKey = getOppositePhase(currentPhase);
+  nextPhase.textContent = getPhaseLabel(nextKey);
+  phaseBadge.textContent = getPhaseLabel(currentPhase);
+  phaseBadge.classList.toggle("rest", currentPhase === PHASES.REST);
   cycleInfo.textContent = `Cycle ${cycleCount}`;
   if (isRunning) {
-    document.title = `${formatTime(remainingSeconds)} · ${phaseBadge.textContent}`;
+    document.title = `${formatTime(remainingSeconds)} · ${getPhaseLabel(currentPhase)}`;
   } else {
     document.title = baseTitle;
   }
@@ -125,6 +142,7 @@ const stopTimer = () => {
   isRunning = false;
   isPaused = false;
   stopMetronome();
+  currentPhase = PHASES.PRACTICE;
   const currentDuration = getDuration(currentPhase);
   if (currentDuration > 0) {
     remainingSeconds = currentDuration;
@@ -171,10 +189,9 @@ const updateMetronomeVolume = () => {
 
 const parseTimeSignature = () => {
   const value = String(metronomeSignatureSelect.value || "4/4");
-  const [beatsRaw, noteRaw] = value.split("/").map((part) => Number(part));
+  const [beatsRaw] = value.split("/").map((part) => Number(part));
   const beats = Number.isNaN(beatsRaw) ? 4 : beatsRaw;
-  const note = Number.isNaN(noteRaw) ? 4 : noteRaw;
-  return { beats, note };
+  return { beats };
 };
 
 const getTempo = () => clampNumber(metronomeTempoInput.value, 30, 300);
@@ -198,7 +215,7 @@ const stopMetronome = () => {
 
 const shouldMetronomeRun = () => {
   if (!metronomeEnabled) return false;
-  if (metronomeAuto && currentPhase === "rest") return false;
+  if (metronomeAuto && currentPhase === PHASES.REST) return false;
   return isRunning;
 };
 
@@ -276,7 +293,7 @@ const playRestStartSfx = () => {
 };
 
 const playPhaseStartSfx = () => {
-  if (currentPhase === "practice") {
+  if (currentPhase === PHASES.PRACTICE) {
     playPracticeStartSfx();
   } else {
     playRestStartSfx();
@@ -311,8 +328,8 @@ const tick = () => {
 };
 
 const startTimer = () => {
-  const practiceDuration = getDuration("practice");
-  const restDuration = getDuration("rest");
+  const practiceDuration = getDuration(PHASES.PRACTICE);
+  const restDuration = getDuration(PHASES.REST);
   if (practiceDuration === 0 && restDuration === 0) {
     loopStatus.textContent = "Set a duration";
     return;
@@ -321,7 +338,7 @@ const startTimer = () => {
     if (!isPaused) {
       // fresh start: start from the first non-zero phase
       const startPhase = getStartPhase();
-      currentPhase = startPhase ? startPhase.phase : "practice";
+      currentPhase = startPhase ? startPhase.phase : PHASES.PRACTICE;
       cycleCount = 1;
       remainingSeconds = startPhase ? startPhase.duration : 0;
       // Play SFX only when starting fresh (not when resuming from pause)
@@ -372,29 +389,18 @@ const pauseTimer = () => {
 
 const handleInputChange = (event) => {
   const input = event.target;
-  // sanitize: keep digits only
-  let raw = String(input.value || "").replace(/\D+/g, "");
-  if (raw === "") {
-    raw = "0";
-  }
-  // limit to two digits
-  if (raw.length > 2) raw = raw.slice(-2);
-  let num = Number(raw);
-  if (Number.isNaN(num)) num = 0;
   const max = Number(input.max || 59);
   const min = Number(input.min || 0);
+  let num = Number(input.value);
+  if (Number.isNaN(num)) {
+    num = 0;
+  }
   num = Math.min(Math.max(num, min), max);
   input.value = String(num);
   updateSummaries();
   if (!isRunning && !isPaused) {
-    const startPhase = getStartPhase();
-    if (startPhase) {
-      currentPhase = startPhase.phase;
-      remainingSeconds = startPhase.duration;
-    } else {
-      currentPhase = "practice";
-      remainingSeconds = 0;
-    }
+    const currentDuration = getDuration(currentPhase);
+    remainingSeconds = currentDuration;
     updateDisplay();
   }
 };
@@ -446,7 +452,7 @@ if (initialPhase) {
   currentPhase = initialPhase.phase;
   remainingSeconds = initialPhase.duration;
 } else {
-  currentPhase = "practice";
+  currentPhase = PHASES.PRACTICE;
   remainingSeconds = 0;
 }
 updateDisplay();
