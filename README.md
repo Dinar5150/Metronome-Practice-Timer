@@ -1,4 +1,4 @@
-# metronome practice timer
+# Metronome Practice Interval Timer
 
 A lightweight practice timer with loopable practice/rest phases and a built‑in metronome.
 
