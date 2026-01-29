@@ -23,6 +23,8 @@ const metronomeVolumeValue = document.getElementById("metronomeVolumeValue");
 const metronomeToggleCheckbox = document.getElementById("metronomeToggle");
 const metronomeAutoToggleCheckbox = document.getElementById("metronomeAutoToggle");
 
+const SETTINGS_STORAGE_KEY = "metronome-practice-timer:settings:v1";
+
 let intervalId = null;
 let isRunning = false;
 let isPaused = false;
@@ -42,6 +44,7 @@ let metronomeTempoDirty = false;
 let metronomeRequestedStartTime = null;
 const metronomeLookaheadMs = 25;
 const metronomeScheduleAheadTime = 0.12;
+let isHydratingSettings = false;
 
 function clampNumber(value, min, max) {
   const num = Number(value);
@@ -50,6 +53,71 @@ function clampNumber(value, min, max) {
   }
   return Math.min(Math.max(num, min), max);
 }
+
+const saveSettings = () => {
+  if (isHydratingSettings) return;
+
+  const settings = {
+    practiceMinutes: clampNumber(practiceMinutesInput.value, 0, 59),
+    practiceSeconds: clampNumber(practiceSecondsInput.value, 0, 59),
+    restMinutes: clampNumber(restMinutesInput.value, 0, 59),
+    restSeconds: clampNumber(restSecondsInput.value, 0, 59),
+    timerVolume: clampNumber(timerVolumeRange.value, 0, 100),
+    metronomeEnabled,
+    metronomeAuto,
+    metronomeSignature: String(metronomeSignatureSelect.value || "4/4"),
+    metronomeTempo: clampNumber(metronomeTempoBpm, 30, 300),
+    metronomeVolume: clampNumber(metronomeVolumeRange.value, 0, 100),
+  };
+
+  try {
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    // ignore storage errors (private mode, quotas, etc.)
+  }
+};
+
+const loadSettings = () => {
+  let raw = null;
+  try {
+    raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+  } catch {
+    raw = null;
+  }
+  if (!raw) return;
+
+  let settings;
+  try {
+    settings = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  if (!settings || typeof settings !== "object") return;
+
+  isHydratingSettings = true;
+
+  practiceMinutesInput.value = String(clampNumber(settings.practiceMinutes, 0, 59));
+  practiceSecondsInput.value = String(clampNumber(settings.practiceSeconds, 0, 59));
+  restMinutesInput.value = String(clampNumber(settings.restMinutes, 0, 59));
+  restSecondsInput.value = String(clampNumber(settings.restSeconds, 0, 59));
+
+  timerVolumeRange.value = String(clampNumber(settings.timerVolume, 0, 100));
+
+  metronomeEnabled = Boolean(settings.metronomeEnabled);
+  metronomeAuto = Boolean(settings.metronomeAuto);
+
+  if (typeof settings.metronomeSignature === "string") {
+    metronomeSignatureSelect.value = settings.metronomeSignature;
+  }
+
+  metronomeTempoBpm = clampNumber(settings.metronomeTempo, 30, 300);
+  metronomeTempoInput.value = String(metronomeTempoBpm);
+  metronomeTempoDirty = false;
+
+  metronomeVolumeRange.value = String(clampNumber(settings.metronomeVolume, 0, 100));
+
+  isHydratingSettings = false;
+};
 
 const PHASES = {
   PRACTICE: "practice",
@@ -170,12 +238,14 @@ const updateTimerVolume = () => {
   const value = clampNumber(timerVolumeRange.value, 0, 100);
   timerVolumeRange.value = value;
   timerVolumeValue.textContent = `${value}%`;
+  saveSettings();
 };
 
 const updateMetronomeVolume = () => {
   const value = clampNumber(metronomeVolumeRange.value, 0, 100);
   metronomeVolumeRange.value = value;
   metronomeVolumeValue.textContent = `${value}%`;
+  saveSettings();
 };
 
 const parseTimeSignature = () => {
@@ -396,6 +466,7 @@ const handleInputChange = (event) => {
   }
   num = Math.min(Math.max(num, min), max);
   input.value = String(num);
+  saveSettings();
   updateSummaries();
   if (!isRunning && !isPaused) {
     const currentDuration = getDuration(currentPhase);
@@ -444,10 +515,13 @@ const commitTempoIfChanged = () => {
     metronomeTempoBpm = nextTempo;
     updateMetronomeState({ forceRestart: true });
   }
+
+  saveSettings();
 };
 
 metronomeSignatureSelect.addEventListener("change", () => {
   updateMetronomeState({ forceRestart: true });
+  saveSettings();
 });
 
 metronomeTempoInput.addEventListener("input", markTempoDirty);
@@ -457,13 +531,17 @@ metronomeTempoInput.addEventListener("blur", commitTempoIfChanged);
 metronomeToggleCheckbox.addEventListener("change", () => {
   metronomeEnabled = metronomeToggleCheckbox.checked;
   updateMetronomeState({ forceRestart: true });
+  saveSettings();
 });
 
 metronomeAutoToggleCheckbox.addEventListener("change", () => {
   metronomeAuto = metronomeAutoToggleCheckbox.checked;
   updateMetronomeState({ forceRestart: true });
+  saveSettings();
 });
 
+loadSettings();
+updateMetronomeButtons();
 updateSummaries();
 const initialPhase = getStartPhase();
 if (initialPhase) {
