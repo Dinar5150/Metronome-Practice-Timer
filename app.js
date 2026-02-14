@@ -23,14 +23,28 @@ const metronomeVolumeValue = document.getElementById("metronomeVolumeValue");
 const metronomeToggleCheckbox = document.getElementById("metronomeToggle");
 const metronomeAutoToggleCheckbox = document.getElementById("metronomeAutoToggle");
 
-const SETTINGS_STORAGE_KEY = "metronome-practice-timer:settings:v1";
+const CONFIG = {
+  STORAGE_KEY: "metronome-practice-timer:settings:v1",
+  MINUTE_SECOND_MIN: 0,
+  MINUTE_SECOND_MAX: 59,
+  VOLUME_MIN: 0,
+  VOLUME_MAX: 100,
+  TEMPO_MIN: 30,
+  TEMPO_MAX: 300,
+  TIMER_TICK_MS: 250,
+  SETTINGS_SAVE_DEBOUNCE_MS: 120,
+  METRONOME_LOOKAHEAD_MS: 25,
+  METRONOME_SCHEDULE_AHEAD_SECONDS: 0.12,
+};
 
 let intervalId = null;
+let titleIntervalId = null;
 let isRunning = false;
 let isPaused = false;
 let currentPhase = "practice";
 let remainingSeconds = 0;
 let cycleCount = 1;
+let phaseEndsAtMs = null;
 let audioContext = null;
 let masterGain = null;
 let metronomeSchedulerId = null;
@@ -39,12 +53,11 @@ let metronomeAuto = false;
 let metronomeBeatIndex = 0;
 let metronomeLastBeatMs = null;
 let metronomeNextTickTime = null;
-let metronomeTempoBpm = clampNumber(metronomeTempoInput.value, 30, 300);
+let metronomeTempoBpm = clampNumber(metronomeTempoInput.value, CONFIG.TEMPO_MIN, CONFIG.TEMPO_MAX);
 let metronomeTempoDirty = false;
 let metronomeRequestedStartTime = null;
-const metronomeLookaheadMs = 25;
-const metronomeScheduleAheadTime = 0.12;
 let isHydratingSettings = false;
+let settingsSaveTimeoutId = null;
 
 function clampNumber(value, min, max) {
   const num = Number(value);
@@ -58,29 +71,39 @@ const saveSettings = () => {
   if (isHydratingSettings) return;
 
   const settings = {
-    practiceMinutes: clampNumber(practiceMinutesInput.value, 0, 59),
-    practiceSeconds: clampNumber(practiceSecondsInput.value, 0, 59),
-    restMinutes: clampNumber(restMinutesInput.value, 0, 59),
-    restSeconds: clampNumber(restSecondsInput.value, 0, 59),
-    timerVolume: clampNumber(timerVolumeRange.value, 0, 100),
+    practiceMinutes: clampNumber(practiceMinutesInput.value, CONFIG.MINUTE_SECOND_MIN, CONFIG.MINUTE_SECOND_MAX),
+    practiceSeconds: clampNumber(practiceSecondsInput.value, CONFIG.MINUTE_SECOND_MIN, CONFIG.MINUTE_SECOND_MAX),
+    restMinutes: clampNumber(restMinutesInput.value, CONFIG.MINUTE_SECOND_MIN, CONFIG.MINUTE_SECOND_MAX),
+    restSeconds: clampNumber(restSecondsInput.value, CONFIG.MINUTE_SECOND_MIN, CONFIG.MINUTE_SECOND_MAX),
+    timerVolume: clampNumber(timerVolumeRange.value, CONFIG.VOLUME_MIN, CONFIG.VOLUME_MAX),
     metronomeEnabled,
     metronomeAuto,
     metronomeSignature: String(metronomeSignatureSelect.value || "4/4"),
-    metronomeTempo: clampNumber(metronomeTempoBpm, 30, 300),
-    metronomeVolume: clampNumber(metronomeVolumeRange.value, 0, 100),
+    metronomeTempo: clampNumber(metronomeTempoBpm, CONFIG.TEMPO_MIN, CONFIG.TEMPO_MAX),
+    metronomeVolume: clampNumber(metronomeVolumeRange.value, CONFIG.VOLUME_MIN, CONFIG.VOLUME_MAX),
   };
 
   try {
-    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(settings));
   } catch {
     // ignore storage errors (private mode, quotas, etc.)
   }
 };
 
+const queueSaveSettings = () => {
+  if (settingsSaveTimeoutId) {
+    clearTimeout(settingsSaveTimeoutId);
+  }
+  settingsSaveTimeoutId = setTimeout(() => {
+    settingsSaveTimeoutId = null;
+    saveSettings();
+  }, CONFIG.SETTINGS_SAVE_DEBOUNCE_MS);
+};
+
 const loadSettings = () => {
   let raw = null;
   try {
-    raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+    raw = localStorage.getItem(CONFIG.STORAGE_KEY);
   } catch {
     raw = null;
   }
@@ -96,12 +119,12 @@ const loadSettings = () => {
 
   isHydratingSettings = true;
 
-  practiceMinutesInput.value = String(clampNumber(settings.practiceMinutes, 0, 59));
-  practiceSecondsInput.value = String(clampNumber(settings.practiceSeconds, 0, 59));
-  restMinutesInput.value = String(clampNumber(settings.restMinutes, 0, 59));
-  restSecondsInput.value = String(clampNumber(settings.restSeconds, 0, 59));
+  practiceMinutesInput.value = String(clampNumber(settings.practiceMinutes, CONFIG.MINUTE_SECOND_MIN, CONFIG.MINUTE_SECOND_MAX));
+  practiceSecondsInput.value = String(clampNumber(settings.practiceSeconds, CONFIG.MINUTE_SECOND_MIN, CONFIG.MINUTE_SECOND_MAX));
+  restMinutesInput.value = String(clampNumber(settings.restMinutes, CONFIG.MINUTE_SECOND_MIN, CONFIG.MINUTE_SECOND_MAX));
+  restSecondsInput.value = String(clampNumber(settings.restSeconds, CONFIG.MINUTE_SECOND_MIN, CONFIG.MINUTE_SECOND_MAX));
 
-  timerVolumeRange.value = String(clampNumber(settings.timerVolume, 0, 100));
+  timerVolumeRange.value = String(clampNumber(settings.timerVolume, CONFIG.VOLUME_MIN, CONFIG.VOLUME_MAX));
 
   metronomeEnabled = Boolean(settings.metronomeEnabled);
   metronomeAuto = Boolean(settings.metronomeAuto);
@@ -110,11 +133,11 @@ const loadSettings = () => {
     metronomeSignatureSelect.value = settings.metronomeSignature;
   }
 
-  metronomeTempoBpm = clampNumber(settings.metronomeTempo, 30, 300);
+  metronomeTempoBpm = clampNumber(settings.metronomeTempo, CONFIG.TEMPO_MIN, CONFIG.TEMPO_MAX);
   metronomeTempoInput.value = String(metronomeTempoBpm);
   metronomeTempoDirty = false;
 
-  metronomeVolumeRange.value = String(clampNumber(settings.metronomeVolume, 0, 100));
+  metronomeVolumeRange.value = String(clampNumber(settings.metronomeVolume, CONFIG.VOLUME_MIN, CONFIG.VOLUME_MAX));
 
   isHydratingSettings = false;
 };
@@ -146,8 +169,8 @@ const getPhaseLabel = (phase) => (phase === PHASES.PRACTICE ? "Practice" : "Rest
 const getOppositePhase = (phase) => (phase === PHASES.PRACTICE ? PHASES.REST : PHASES.PRACTICE);
 
 const getInputDuration = ({ minutes, seconds }) => {
-  const minutesValue = clampNumber(minutes.value, 0, 59);
-  const secondsValue = clampNumber(seconds.value, 0, 59);
+  const minutesValue = clampNumber(minutes.value, CONFIG.MINUTE_SECOND_MIN, CONFIG.MINUTE_SECOND_MAX);
+  const secondsValue = clampNumber(seconds.value, CONFIG.MINUTE_SECOND_MIN, CONFIG.MINUTE_SECOND_MAX);
   return minutesValue * 60 + secondsValue;
 };
 
@@ -201,6 +224,26 @@ const updateDisplay = () => {
   }
 };
 
+const startTitleUpdater = () => {
+  if (titleIntervalId) {
+    clearInterval(titleIntervalId);
+  }
+  titleIntervalId = setInterval(() => {
+    if (!isRunning) {
+      return;
+    }
+    tick();
+  }, 1000);
+};
+
+const stopTitleUpdater = () => {
+  if (!titleIntervalId) {
+    return;
+  }
+  clearInterval(titleIntervalId);
+  titleIntervalId = null;
+};
+
 const updateControls = () => {
   playButton.disabled = isRunning && !isPaused;
   pauseButton.disabled = !isRunning;
@@ -210,8 +253,10 @@ const updateControls = () => {
 const stopTimer = () => {
   clearInterval(intervalId);
   intervalId = null;
+  stopTitleUpdater();
   isRunning = false;
   isPaused = false;
+  phaseEndsAtMs = null;
   stopMetronome();
   currentPhase = PHASES.PRACTICE;
   const practiceDuration = getDuration(PHASES.PRACTICE);
@@ -235,17 +280,17 @@ const getAudioContext = () => {
 };
 
 const updateTimerVolume = () => {
-  const value = clampNumber(timerVolumeRange.value, 0, 100);
+  const value = clampNumber(timerVolumeRange.value, CONFIG.VOLUME_MIN, CONFIG.VOLUME_MAX);
   timerVolumeRange.value = value;
   timerVolumeValue.textContent = `${value}%`;
-  saveSettings();
+  queueSaveSettings();
 };
 
 const updateMetronomeVolume = () => {
-  const value = clampNumber(metronomeVolumeRange.value, 0, 100);
+  const value = clampNumber(metronomeVolumeRange.value, CONFIG.VOLUME_MIN, CONFIG.VOLUME_MAX);
   metronomeVolumeRange.value = value;
   metronomeVolumeValue.textContent = `${value}%`;
-  saveSettings();
+  queueSaveSettings();
 };
 
 const parseTimeSignature = () => {
@@ -297,7 +342,7 @@ const startMetronome = () => {
       stopMetronome();
       return;
     }
-    while (metronomeNextTickTime < context.currentTime + metronomeScheduleAheadTime) {
+    while (metronomeNextTickTime < context.currentTime + CONFIG.METRONOME_SCHEDULE_AHEAD_SECONDS) {
       const beatInBar = metronomeBeatIndex % beats;
       playMetronomeClick(beatInBar === 0, metronomeNextTickTime);
       metronomeBeatIndex += 1;
@@ -305,7 +350,7 @@ const startMetronome = () => {
     }
   };
   scheduler();
-  metronomeSchedulerId = setInterval(scheduler, metronomeLookaheadMs);
+  metronomeSchedulerId = setInterval(scheduler, CONFIG.METRONOME_LOOKAHEAD_MS);
 };
 
 const updateMetronomeButtons = () => {
@@ -331,7 +376,7 @@ const playTone = (frequency, duration, type = "sine", volume = 100, startTime = 
   const oscillator = context.createOscillator();
   const gain = context.createGain();
   const now = startTime ?? context.currentTime;
-  gain.gain.value = clampNumber(volume, 0, 100) / 100;
+  gain.gain.value = clampNumber(volume, CONFIG.VOLUME_MIN, CONFIG.VOLUME_MAX) / 100;
   oscillator.type = type;
   oscillator.frequency.value = frequency;
   oscillator.connect(gain);
@@ -369,30 +414,62 @@ const playPhaseStartSfx = () => {
   }
 };
 
-const nextPhaseCycle = () => {
+const applyPhaseTransition = ({ phase, duration, incrementCycle = false, playSfx = true, endAtMs }) => {
+  currentPhase = phase;
+  if (incrementCycle) {
+    cycleCount += 1;
+  }
+  remainingSeconds = duration;
+  phaseEndsAtMs = endAtMs;
+
+  if (playSfx) {
+    if (phase === PHASES.PRACTICE) {
+      playPracticeStartSfx();
+    } else {
+      playRestStartSfx();
+    }
+  }
+
+  updateDisplay();
+  updateMetronomeState({ forceRestart: true });
+};
+
+const nextPhaseCycle = ({ playSfx = true, anchorMs = Date.now() } = {}) => {
   const next = getNextPhase();
   if (!next) {
     stopTimer();
     return;
   }
-  currentPhase = next.phase;
-  if (next.incrementCycle) {
-    cycleCount += 1;
-    playPracticeStartSfx();
-  } else {
-    playRestStartSfx();
-  }
-  remainingSeconds = next.duration;
-  updateDisplay();
-  updateMetronomeState({ forceRestart: true });
+
+  applyPhaseTransition({
+    phase: next.phase,
+    duration: next.duration,
+    incrementCycle: next.incrementCycle,
+    playSfx,
+    endAtMs: anchorMs + next.duration * 1000,
+  });
 };
 
 const tick = () => {
-  if (remainingSeconds <= 0) {
-    nextPhaseCycle();
-    return;
+  if (!isRunning) return;
+
+  const now = Date.now();
+  if (phaseEndsAtMs === null) {
+    phaseEndsAtMs = now + remainingSeconds * 1000;
   }
-  remainingSeconds -= 1;
+
+  const shortDelayThresholdMs = CONFIG.TIMER_TICK_MS * 2;
+  while (phaseEndsAtMs !== null && now >= phaseEndsAtMs) {
+    const lagMs = now - phaseEndsAtMs;
+    const shouldPlaySfx = lagMs <= shortDelayThresholdMs;
+    const anchorMs = shouldPlaySfx ? now : phaseEndsAtMs;
+    nextPhaseCycle({ playSfx: shouldPlaySfx, anchorMs });
+    if (!isRunning || phaseEndsAtMs === null) {
+      return;
+    }
+  }
+
+  remainingSeconds = Math.max(0, Math.ceil((phaseEndsAtMs - now) / 1000));
   updateDisplay();
 };
 
@@ -410,6 +487,7 @@ const startTimer = () => {
       currentPhase = startPhase ? startPhase.phase : PHASES.PRACTICE;
       cycleCount = 1;
       remainingSeconds = startPhase ? startPhase.duration : 0;
+      phaseEndsAtMs = Date.now() + remainingSeconds * 1000;
       // Play SFX only when starting fresh (not when resuming from pause)
       playPhaseStartSfx();
     } else {
@@ -431,10 +509,12 @@ const startTimer = () => {
           remainingSeconds = next.duration;
         }
       }
+      phaseEndsAtMs = Date.now() + remainingSeconds * 1000;
     }
   }
   clearInterval(intervalId);
-  intervalId = setInterval(tick, 1000);
+  intervalId = setInterval(tick, CONFIG.TIMER_TICK_MS);
+  startTitleUpdater();
   isRunning = true;
   isPaused = false;
   loopStatus.textContent = "Running";
@@ -447,26 +527,36 @@ const pauseTimer = () => {
   if (!isRunning) {
     return;
   }
+  tick();
   clearInterval(intervalId);
   intervalId = null;
+  stopTitleUpdater();
   isRunning = false;
   isPaused = true;
+  phaseEndsAtMs = null;
   loopStatus.textContent = "Paused";
   updateControls();
   stopMetronome();
 };
 
+const syncTimerDisplayFromClock = () => {
+  if (!isRunning) {
+    return;
+  }
+  tick();
+};
+
 const handleInputChange = (event) => {
   const input = event.target;
-  const max = Number(input.max || 59);
-  const min = Number(input.min || 0);
+  const max = Number(input.max || CONFIG.MINUTE_SECOND_MAX);
+  const min = Number(input.min || CONFIG.MINUTE_SECOND_MIN);
   let num = Number(input.value);
   if (Number.isNaN(num)) {
     num = 0;
   }
   num = Math.min(Math.max(num, min), max);
   input.value = String(num);
-  saveSettings();
+  queueSaveSettings();
   updateSummaries();
   if (!isRunning && !isPaused) {
     const currentDuration = getDuration(currentPhase);
@@ -509,7 +599,7 @@ const commitTempoIfChanged = () => {
     metronomeTempoInput.value = String(metronomeTempoBpm);
     return;
   }
-  const nextTempo = clampNumber(parsed, 30, 300);
+  const nextTempo = clampNumber(parsed, CONFIG.TEMPO_MIN, CONFIG.TEMPO_MAX);
   metronomeTempoInput.value = String(nextTempo);
   if (nextTempo !== metronomeTempoBpm) {
     metronomeTempoBpm = nextTempo;
@@ -540,6 +630,9 @@ metronomeAutoToggleCheckbox.addEventListener("change", () => {
   saveSettings();
 });
 
+document.addEventListener("visibilitychange", syncTimerDisplayFromClock);
+window.addEventListener("focus", syncTimerDisplayFromClock);
+
 loadSettings();
 updateMetronomeButtons();
 updateSummaries();
@@ -555,4 +648,3 @@ updateDisplay();
 updateControls();
 updateTimerVolume();
 updateMetronomeVolume();
-updateMetronomeButtons();
